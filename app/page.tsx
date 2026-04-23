@@ -61,6 +61,19 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<CombinedRankResult[]>([]);
   const [error, setError] = useState("");
+  const totalKeywords = inputSets.reduce(
+    (count, item) =>
+      count +
+      item.keywords
+        .split("\n")
+        .map((k) => k.trim())
+        .filter(Boolean).length,
+    0,
+  );
+
+  const fieldClass =
+    "w-full rounded-xl border border-slate-300 bg-slate-50/70 px-3.5 py-2 text-sm text-slate-800 outline-none transition duration-200 placeholder:text-slate-400 focus:border-cyan-500 focus:bg-white focus:ring-4 focus:ring-cyan-100";
+  const labelClass = "mb-1.5 block text-sm font-semibold text-slate-700";
 
   function addInputSet() {
     const id = nextInputId.current;
@@ -123,6 +136,7 @@ export default function Home() {
       const message =
         err instanceof Error ? err.message : "Please verify input details.";
       setError(message);
+      console.error("[page] Input validation failed", { error: message });
       return;
     }
 
@@ -169,9 +183,26 @@ export default function Home() {
             targetDomain: payload.domain,
             device: payload.device,
           }));
+          const erroredRows = mapped.filter((row) => row.error);
+          if (erroredRows.length) {
+            console.error("[page] Rank rows returned with errors", {
+              input: payload.inputName,
+              errors: erroredRows.map((row) => ({
+                keyword: row.keyword,
+                error: row.error,
+              })),
+            });
+          }
           combined.push(...mapped);
           return;
         }
+        console.error("[page] Request failed for input", {
+          input: payload.inputName,
+          reason:
+            entry.reason instanceof Error
+              ? entry.reason.message
+              : String(entry.reason),
+        });
         failedInputs.push(payload.inputName);
       });
 
@@ -188,6 +219,7 @@ export default function Home() {
           ? err.message
           : "Request failed. Please try again.";
       setError(message);
+      console.error("[page] Rank check failed", { error: message });
     } finally {
       setLoading(false);
     }
@@ -220,210 +252,250 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-10 px-4 text-black">
-      <div className="max-w-5xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">
-          SERP Keyword Rank Checker
-        </h1>
-        <p className="text-gray-500 mb-8 text-sm">
-          Check where your domain ranks on Google for any keyword.
-        </p>
+    <div className="relative min-h-screen overflow-hidden px-4 py-8 text-slate-900 sm:px-6 lg:px-8">
+      <div className="glow-float pointer-events-none absolute -top-28 left-[-80px] h-80 w-80 rounded-full bg-cyan-300/40 blur-3xl" />
+      <div className="glow-float pointer-events-none absolute right-[-120px] top-32 h-96 w-96 rounded-full bg-blue-300/35 blur-3xl [animation-delay:2s]" />
 
-        <div className="bg-white rounded-2xl shadow p-6 mb-6 space-y-5">
-          {inputSets.map((item, idx) => {
-            const selectedCountry =
-              countries.find((c) => c.code2 === item.country) || null;
-            const states = selectedCountry?.states || [];
+      <div className="relative mx-auto w-full max-w-6xl space-y-6">
+        <section className="surface-panel fade-up rounded-3xl p-6 sm:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-2xl">
+              <p className="mb-3 inline-flex items-center rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
+                Live SERP Monitor
+              </p>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                SERP Keyword Rank Checker
+              </h1>
+              <p className="mt-3 text-sm text-slate-600 sm:text-base">
+                Track where your domain ranks on Google across countries,
+                cities, and devices in one clean workflow.
+              </p>
+            </div>
 
-            return (
-              <div
-                key={item.id}
-                className="rounded-xl border border-gray-200 p-4 space-y-4"
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-gray-700">
-                    Input #{idx + 1}
-                  </h3>
-                  {inputSets.length > 1 && (
-                    <button
-                      onClick={() => removeInputSet(item.id)}
-                      className="text-xs text-red-600 hover:text-red-700 font-medium"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
+            <div className="grid grid-cols-2 gap-3 sm:gap-4">
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-center shadow-sm">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Input Sets
+                </p>
+                <p className="mt-1 text-2xl font-bold text-slate-900">
+                  {inputSets.length}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-center shadow-sm">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Keywords
+                </p>
+                <p className="mt-1 text-2xl font-bold text-slate-900">
+                  {totalKeywords}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Keywords{" "}
-                      <span className="text-gray-400">(one per line)</span>
-                    </label>
-                    <textarea
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[140px] resize-y"
-                      placeholder={
-                        "mca company registration\ngstin search\nincome tax efiling"
-                      }
-                      value={item.keywords}
-                      onChange={(e) =>
-                        updateInputSet(item.id, { keywords: e.target.value })
-                      }
-                    />
+        <section className="surface-panel fade-up rounded-3xl p-4 sm:p-6">
+          <div className="space-y-4">
+            {inputSets.map((item, idx) => {
+              const selectedCountry =
+                countries.find((c) => c.code2 === item.country) || null;
+              const states = selectedCountry?.states || [];
+
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md sm:p-5"
+                >
+                  <div className="mb-4 flex items-center justify-between">
+                    <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-xs font-bold text-white">
+                        {idx + 1}
+                      </span>
+                      Input #{idx + 1}
+                    </h3>
+                    {inputSets.length > 1 && (
+                      <button
+                        onClick={() => removeInputSet(item.id)}
+                        className="rounded-lg px-2.5 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 hover:text-rose-700"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
 
-                  <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Target Domain
+                      <label className={labelClass}>
+                        Keywords{" "}
+                        <span className="font-medium text-slate-400">
+                          (one per line)
+                        </span>
                       </label>
-                      <input
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="mca.gov.in"
-                        value={item.domain}
+                      <textarea
+                        className={`${fieldClass} min-h-[120px] resize-y`}
+                        placeholder={"gstin search\nincome tax efiling"}
+                        value={item.keywords}
                         onChange={(e) =>
-                          updateInputSet(item.id, { domain: e.target.value })
+                          updateInputSet(item.id, { keywords: e.target.value })
                         }
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Country
-                      </label>
-                      <select
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                        value={item.country}
-                        onChange={(e) =>
-                          handleCountryChange(item.id, e.target.value)
-                        }
-                      >
-                        {countries.map((c) => (
-                          <option key={c.code2} value={c.code2}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        State / City{" "}
-                        <span className="text-gray-400">(optional)</span>
-                      </label>
-                      {states.length > 0 ? (
-                        <select
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                          value={item.state}
-                          onChange={(e) =>
-                            updateInputSet(item.id, { state: e.target.value })
-                          }
-                        >
-                          <option value="">-- All states --</option>
-                          {states.map((s) => (
-                            <option key={s.code} value={s.name}>
-                              {s.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
+                    <div className="space-y-4">
+                      <div>
+                        <label className={labelClass}>Target Domain</label>
                         <input
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="City or region"
-                          value={item.state}
+                          className={fieldClass}
+                          placeholder="taxlegit.com"
+                          value={item.domain}
                           onChange={(e) =>
-                            updateInputSet(item.id, { state: e.target.value })
+                            updateInputSet(item.id, { domain: e.target.value })
                           }
                         />
-                      )}
-                    </div>
+                      </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Device
-                      </label>
-                      <div className="flex gap-4">
-                        {(["desktop", "mobile"] as const).map((d) => (
-                          <label
-                            key={d}
-                            className="flex items-center gap-2 cursor-pointer"
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className={labelClass}>Country</label>
+                          <select
+                            className={fieldClass}
+                            value={item.country}
+                            onChange={(e) =>
+                              handleCountryChange(item.id, e.target.value)
+                            }
                           >
-                            <input
-                              type="radio"
-                              name={`device-${item.id}`}
-                              value={d}
-                              checked={item.device === d}
-                              onChange={() =>
-                                updateInputSet(item.id, { device: d })
-                              }
-                              className="accent-blue-600"
-                            />
-                            <span className="text-sm capitalize text-gray-700">
-                              {d}
+                            {countries.map((c) => (
+                              <option key={c.code2} value={c.code2}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className={labelClass}>
+                            State / City{" "}
+                            <span className="font-medium text-slate-400">
+                              (optional)
                             </span>
                           </label>
-                        ))}
+                          {states.length > 0 ? (
+                            <select
+                              className={fieldClass}
+                              value={item.state}
+                              onChange={(e) =>
+                                updateInputSet(item.id, {
+                                  state: e.target.value,
+                                })
+                              }
+                            >
+                              <option value="">-- All states --</option>
+                              {states.map((s) => (
+                                <option key={s.code} value={s.name}>
+                                  {s.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              className={fieldClass}
+                              placeholder="City or region"
+                              value={item.state}
+                              onChange={(e) =>
+                                updateInputSet(item.id, {
+                                  state: e.target.value,
+                                })
+                              }
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Device</label>
+                        <div className="flex gap-2.5">
+                          {(["desktop", "mobile"] as const).map((d) => (
+                            <label key={d} className="cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`device-${item.id}`}
+                                value={d}
+                                checked={item.device === d}
+                                onChange={() =>
+                                  updateInputSet(item.id, { device: d })
+                                }
+                                className="peer sr-only"
+                              />
+                              <span className="inline-flex items-center rounded-xl border border-slate-300 px-3 py-1.5 text-sm font-semibold capitalize text-slate-600 transition peer-checked:border-transparent peer-checked:bg-gradient-to-r peer-checked:from-cyan-500 peer-checked:to-blue-600 peer-checked:text-white">
+                                {d}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
+              );
+            })}
+
+            {error && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+                {error}
               </div>
-            );
-          })}
+            )}
 
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+            <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center">
+              <button
+                onClick={addInputSet}
+                disabled={loading}
+                className="inline-flex w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              >
+                + Add Another Input
+              </button>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={addInputSet}
-              disabled={loading}
-              className="w-full md:w-auto bg-gray-200 hover:bg-gray-300 disabled:opacity-60 text-gray-800 font-semibold px-6 py-2.5 rounded-lg transition-colors"
-            >
-              + Add Another Input
-            </button>
-
-            <button
-              onClick={handleCheck}
-              disabled={loading}
-              className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold px-8 py-2.5 rounded-lg transition-colors flex items-center gap-2"
-            >
-              {loading && (
-                <svg
-                  className="animate-spin h-4 w-4 text-white"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8v8H4z"
-                  />
-                </svg>
-              )}
-              {loading ? "Checking Rankings..." : "Check All Rankings"}
-            </button>
+              <button
+                onClick={handleCheck}
+                disabled={loading}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-700 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-cyan-600/25 transition hover:from-cyan-500 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              >
+                {loading && (
+                  <svg
+                    className="h-4 w-4 animate-spin text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v8H4z"
+                    />
+                  </svg>
+                )}
+                {loading ? "Checking Rankings..." : "Check All Rankings"}
+              </button>
+            </div>
           </div>
-        </div>
+        </section>
 
         {results.length > 0 && (
-          <div className="bg-white rounded-2xl shadow p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-800">
+          <section className="surface-panel fade-up rounded-3xl p-4 sm:p-6">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className="text-lg font-bold text-slate-800 sm:text-xl">
                 Results ({results.length} keyword
                 {results.length !== 1 ? "s" : ""})
               </h2>
               <button
                 onClick={handleExport}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -443,10 +515,10 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left border-collapse">
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+              <table className="w-full min-w-[980px] border-collapse text-left text-sm">
                 <thead>
-                  <tr className="bg-gray-100 text-gray-600 text-xs uppercase tracking-wide">
+                  <tr className="bg-slate-100 text-xs uppercase tracking-wide text-slate-600">
                     <th className="px-3 py-3 font-semibold">Input</th>
                     <th className="px-3 py-3 font-semibold">Keyword</th>
                     <th className="px-3 py-3 font-semibold">Target Domain</th>
@@ -464,46 +536,48 @@ export default function Home() {
                   {results.map((r, i) => (
                     <tr
                       key={i}
-                      className="border-t border-gray-100 hover:bg-gray-50 transition-colors"
+                      className="border-t border-slate-100 transition odd:bg-white even:bg-slate-50/40 hover:bg-cyan-50/40"
                     >
-                      <td className="px-3 py-3 text-gray-700 whitespace-nowrap">
+                      <td className="whitespace-nowrap px-3 py-3 text-slate-700">
                         {r.inputName}
                       </td>
-                      <td className="px-3 py-3 font-medium text-gray-800 max-w-[160px] truncate">
+                      <td className="max-w-[180px] truncate px-3 py-3 font-semibold text-slate-900">
                         {r.keyword}
                       </td>
                       <td
-                        className="px-3 py-3 text-gray-700 max-w-[180px] truncate"
+                        className="max-w-[180px] truncate px-3 py-3 text-slate-700"
                         title={r.targetDomain}
                       >
                         {r.targetDomain}
                       </td>
-                      <td className="px-3 py-3 text-gray-600 capitalize">
+                      <td className="px-3 py-3 capitalize text-slate-600">
                         {r.device}
                       </td>
-                      <td className="px-3 py-3 text-gray-600">
+                      <td className="px-3 py-3 text-slate-600">
                         {countries.find((c) => c.code2 === r.country)?.name ||
                           r.country}
                       </td>
-                      <td className="px-3 py-3 text-gray-600">
+                      <td className="px-3 py-3 text-slate-600">
                         {r.city || "-"}
                       </td>
                       <td className="px-3 py-3 font-semibold">
                         {r.error ? (
-                          <span className="text-orange-500">{r.error}</span>
+                          <span className="text-amber-600">{r.error}</span>
                         ) : r.yourRank ? (
-                          <span className="text-green-600">#{r.yourRank}</span>
+                          <span className="text-emerald-600">
+                            #{r.yourRank}
+                          </span>
                         ) : (
-                          <span className="text-red-500">Not in top 100</span>
+                          <span className="text-rose-600">Not in top 100</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 max-w-[180px]">
+                      <td className="max-w-[190px] px-3 py-3">
                         {r.yourRankedUrl ? (
                           <a
                             href={r.yourRankedUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline truncate block"
+                            className="block truncate text-cyan-700 underline-offset-2 hover:underline"
                             title={r.yourRankedUrl}
                           >
                             {r.yourRankedUrl}
@@ -512,16 +586,16 @@ export default function Home() {
                           "-"
                         )}
                       </td>
-                      <td className="px-3 py-3 text-gray-700 font-medium">
+                      <td className="px-3 py-3 font-semibold text-slate-700">
                         {r.topRankedSite || "-"}
                       </td>
-                      <td className="px-3 py-3 max-w-[180px]">
+                      <td className="max-w-[190px] px-3 py-3">
                         {r.topRankedUrl ? (
                           <a
                             href={r.topRankedUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline truncate block"
+                            className="block truncate text-cyan-700 underline-offset-2 hover:underline"
                             title={r.topRankedUrl}
                           >
                             {r.topRankedUrl}
@@ -530,7 +604,7 @@ export default function Home() {
                           "-"
                         )}
                       </td>
-                      <td className="px-3 py-3 text-gray-500 whitespace-nowrap">
+                      <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-slate-500">
                         {formatDate(r.checkedAt)}
                       </td>
                     </tr>
@@ -538,7 +612,7 @@ export default function Home() {
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         )}
       </div>
     </div>
