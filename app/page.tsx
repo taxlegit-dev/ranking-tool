@@ -30,7 +30,6 @@ interface InputSet {
   keywords: string;
   domain: string;
   country: string;
-  state: string;
   device: "desktop" | "mobile";
 }
 
@@ -50,7 +49,6 @@ function createInputSet(id: number): InputSet {
     keywords: "",
     domain: "",
     country: "IN",
-    state: "",
     device: "desktop",
   };
 }
@@ -84,7 +82,7 @@ export default function Home() {
   }
 
   function handleCountryChange(id: string, code: string) {
-    updateInputSet(id, { country: code, state: "" });
+    updateInputSet(id, { country: code });
   }
 
   async function handleCheck() {
@@ -121,7 +119,7 @@ export default function Home() {
           keywords,
           domain: item.domain.trim(),
           country: item.country,
-          city: item.state.trim(),
+          city: "",
           device: item.device,
         };
       });
@@ -228,7 +226,6 @@ export default function Home() {
       "Target Domain": r.targetDomain,
       Device: r.device,
       Country: countries.find((c) => c.code2 === r.country)?.name || r.country,
-      "State / City": r.city || "-",
       "Your Rank": r.error
         ? "Failed to fetch"
         : r.yourRank
@@ -292,10 +289,6 @@ export default function Home() {
         <section className="surface-panel fade-up rounded-3xl p-4 sm:p-6">
           <div className="space-y-4">
             {inputSets.map((item, idx) => {
-              const selectedCountry =
-                countries.find((c) => c.code2 === item.country) || null;
-              const states = selectedCountry?.states || [];
-
               return (
                 <div
                   key={item.id}
@@ -341,7 +334,7 @@ export default function Home() {
                         />
                       </div>
 
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-4">
                         <div>
                           <label className={labelClass}>Country</label>
                           <select
@@ -357,44 +350,6 @@ export default function Home() {
                               </option>
                             ))}
                           </select>
-                        </div>
-
-                        <div>
-                          <label className={labelClass}>
-                            State / City{" "}
-                            <span className="font-medium text-slate-400">
-                              (optional)
-                            </span>
-                          </label>
-                          {states.length > 0 ? (
-                            <select
-                              className={fieldClass}
-                              value={item.state}
-                              onChange={(e) =>
-                                updateInputSet(item.id, {
-                                  state: e.target.value,
-                                })
-                              }
-                            >
-                              <option value="">-- All states --</option>
-                              {states.map((s) => (
-                                <option key={s.code} value={s.name}>
-                                  {s.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              className={fieldClass}
-                              placeholder="City or region"
-                              value={item.state}
-                              onChange={(e) =>
-                                updateInputSet(item.id, {
-                                  state: e.target.value,
-                                })
-                              }
-                            />
-                          )}
                         </div>
                       </div>
 
@@ -533,7 +488,6 @@ export default function Home() {
                     <th className="px-3 py-3 font-semibold">Target Domain</th>
                     <th className="px-3 py-3 font-semibold">Device</th>
                     <th className="px-3 py-3 font-semibold">Country</th>
-                    <th className="px-3 py-3 font-semibold">State / City</th>
                     <th className="px-3 py-3 font-semibold">Your Rank</th>
                     <th className="px-3 py-3 font-semibold">Your Ranked URL</th>
                     <th className="px-3 py-3 font-semibold">Top Ranked Site</th>
@@ -565,9 +519,6 @@ export default function Home() {
                       <td className="px-3 py-3 text-slate-600">
                         {countries.find((c) => c.code2 === r.country)?.name ||
                           r.country}
-                      </td>
-                      <td className="px-3 py-3 text-slate-600">
-                        {r.city || "-"}
                       </td>
                       <td className="px-3 py-3 font-semibold">
                         {r.error ? (
