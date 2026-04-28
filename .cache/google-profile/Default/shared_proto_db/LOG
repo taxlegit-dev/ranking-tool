@@ -1,2 +1,3 @@
-2026/04/23-17:18:38.110 35a0 Creating DB C:\Users\Dell\Documents\taxlegit\ranking\.cache\google-profile\Default\shared_proto_db since it was missing.
-2026/04/23-17:18:38.150 35a0 Reusing MANIFEST C:\Users\Dell\Documents\taxlegit\ranking\.cache\google-profile\Default\shared_proto_db/MANIFEST-000001
+2026/04/28-10:47:13.838 78d8 Reusing MANIFEST C:\Users\Dell\Documents\taxlegit\ranking\.cache\google-profile\Default\shared_proto_db/MANIFEST-000001
+2026/04/28-10:47:13.861 78d8 Recovering log #3
+2026/04/28-10:47:13.862 78d8 Reusing old log C:\Users\Dell\Documents\taxlegit\ranking\.cache\google-profile\Default\shared_proto_db/000003.log 

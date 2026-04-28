@@ -56,11 +56,12 @@ function createInputSet(id: number): InputSet {
 }
 
 export default function Home() {
-  const nextInputId = useRef(2);
   const [inputSets, setInputSets] = useState<InputSet[]>([createInputSet(1)]);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<CombinedRankResult[]>([]);
   const [error, setError] = useState("");
+  const [logs, setLogs] = useState<string[]>([]);
+  const logEndRef = useRef<HTMLDivElement>(null);
   const totalKeywords = inputSets.reduce(
     (count, item) =>
       count +
@@ -74,19 +75,6 @@ export default function Home() {
   const fieldClass =
     "w-full rounded-xl border border-slate-300 bg-slate-50/70 px-3.5 py-2 text-sm text-slate-800 outline-none transition duration-200 placeholder:text-slate-400 focus:border-cyan-500 focus:bg-white focus:ring-4 focus:ring-cyan-100";
   const labelClass = "mb-1.5 block text-sm font-semibold text-slate-700";
-
-  function addInputSet() {
-    const id = nextInputId.current;
-    nextInputId.current += 1;
-    setInputSets((prev) => [...prev, createInputSet(id)]);
-  }
-
-  function removeInputSet(id: string) {
-    setInputSets((prev) => {
-      if (prev.length <= 1) return prev;
-      return prev.filter((item) => item.id !== id);
-    });
-  }
 
   function updateInputSet(id: string, patch: Partial<Omit<InputSet, "id">>) {
     setInputSets((prev) =>
@@ -119,6 +107,9 @@ export default function Home() {
         if (!keywords.length) {
           throw new Error(`Input #${index + 1}: Enter at least one keyword.`);
         }
+        if (keywords.length > 10) {
+          throw new Error(`Input #${index + 1}: Maximum 10 keywords allowed at a time.`);
+        }
         if (!item.domain.trim()) {
           throw new Error(`Input #${index + 1}: Enter a target domain.`);
         }
@@ -142,84 +133,69 @@ export default function Home() {
 
     setLoading(true);
     setResults([]);
+    setLogs([]);
 
     try {
-      const settled = await Promise.allSettled(
-        payloads.map(async (payload) => {
-          const res = await fetch("/api/check-rank", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              keywords: payload.keywords,
-              domain: payload.domain,
-              country: payload.country,
-              city: payload.city,
-              device: payload.device,
-            }),
-          });
-
-          const data = (await res.json()) as {
-            results?: RankResult[];
-            error?: string;
-          };
-
-          if (!res.ok) {
-            throw new Error(data.error || "Request failed.");
-          }
-
-          return data.results || [];
-        }),
-      );
-
-      const combined: CombinedRankResult[] = [];
-      const failedInputs: string[] = [];
-
-      settled.forEach((entry, idx) => {
-        const payload = payloads[idx];
-        if (entry.status === "fulfilled") {
-          const mapped = entry.value.map((result) => ({
-            ...result,
-            inputName: payload.inputName,
-            targetDomain: payload.domain,
+      for (const payload of payloads) {
+        const res = await fetch("/api/check-rank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            keywords: payload.keywords,
+            domain: payload.domain,
+            country: payload.country,
+            city: payload.city,
             device: payload.device,
-          }));
-          const erroredRows = mapped.filter((row) => row.error);
-          if (erroredRows.length) {
-            console.error("[page] Rank rows returned with errors", {
-              input: payload.inputName,
-              errors: erroredRows.map((row) => ({
-                keyword: row.keyword,
-                error: row.error,
-              })),
-            });
-          }
-          combined.push(...mapped);
+          }),
+        });
+
+        if (!res.ok || !res.body) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          setError(data.error || "Request failed.");
+          setLoading(false);
           return;
         }
-        console.error("[page] Request failed for input", {
-          input: payload.inputName,
-          reason:
-            entry.reason instanceof Error
-              ? entry.reason.message
-              : String(entry.reason),
-        });
-        failedInputs.push(payload.inputName);
-      });
 
-      setResults(combined);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-      if (!combined.length) {
-        setError("No results returned. Please try again.");
-      } else if (failedInputs.length) {
-        setError(`Some inputs failed: ${failedInputs.join(", ")}.`);
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          for (const part of parts) {
+            const eventMatch = part.match(/^event: (\w+)\ndata:([\s\S]+)$/);
+            if (!eventMatch) continue;
+            const [, event, dataStr] = eventMatch;
+            let parsed: unknown;
+            try { parsed = JSON.parse(dataStr); } catch { continue; }
+
+            if (event === "log") {
+              const { keyword, message } = parsed as { keyword: string; message: string };
+              const line = `[${keyword}] ${message}`;
+              setLogs((prev) => {
+                const next = [...prev, line];
+                setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: "smooth" }), 10);
+                return next;
+              });
+            } else if (event === "result") {
+              const result = parsed as RankResult;
+              setResults((prev) => [
+                ...prev,
+                { ...result, inputName: payload.inputName, targetDomain: payload.domain, device: payload.device },
+              ]);
+            }
+          }
+        }
       }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Request failed. Please try again.";
+      const message = err instanceof Error ? err.message : "Request failed. Please try again.";
       setError(message);
-      console.error("[page] Rank check failed", { error: message });
     } finally {
       setLoading(false);
     }
@@ -312,14 +288,6 @@ export default function Home() {
                       </span>
                       Input #{idx + 1}
                     </h3>
-                    {inputSets.length > 1 && (
-                      <button
-                        onClick={() => removeInputSet(item.id)}
-                        className="rounded-lg px-2.5 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 hover:text-rose-700"
-                      >
-                        Remove
-                      </button>
-                    )}
                   </div>
 
                   <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -327,7 +295,7 @@ export default function Home() {
                       <label className={labelClass}>
                         Keywords{" "}
                         <span className="font-medium text-slate-400">
-                          (one per line)
+                          (one per line, max 10)
                         </span>
                       </label>
                       <textarea
@@ -446,14 +414,6 @@ export default function Home() {
 
             <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center">
               <button
-                onClick={addInputSet}
-                disabled={loading}
-                className="inline-flex w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-              >
-                + Add Another Input
-              </button>
-
-              <button
                 onClick={handleCheck}
                 disabled={loading}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-700 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-cyan-600/25 transition hover:from-cyan-500 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
@@ -486,12 +446,33 @@ export default function Home() {
           </div>
         </section>
 
+        {(loading || logs.length > 0) && (
+          <section className="surface-panel fade-up rounded-3xl p-4 sm:p-6">
+            <h2 className="mb-3 text-sm font-semibold text-slate-700">Live Progress</h2>
+            <div className="h-56 overflow-y-auto rounded-xl bg-slate-900 p-4 font-mono text-xs leading-relaxed text-slate-200">
+              {logs.map((line, i) => {
+                const color = line.includes("✅") ? "text-emerald-400"
+                  : line.includes("✗") ? "text-rose-400"
+                  : line.includes("⚠") ? "text-amber-400"
+                  : line.includes("✓") ? "text-cyan-400"
+                  : line.includes("→") ? "text-slate-400"
+                  : "text-slate-300";
+                return <div key={i} className={color}>{line}</div>;
+              })}
+              {loading && (
+                <div className="mt-1 animate-pulse text-slate-500">▌</div>
+              )}
+              <div ref={logEndRef} />
+            </div>
+          </section>
+        )}
+
         {results.length > 0 && (
           <section className="surface-panel fade-up rounded-3xl p-4 sm:p-6">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-lg font-bold text-slate-800 sm:text-xl">
-                Results ({results.length} keyword
-                {results.length !== 1 ? "s" : ""})
+                Results ({results.length} keyword{results.length !== 1 ? "s" : ""}
+                {loading ? " — checking..." : ""})
               </h2>
               <button
                 onClick={handleExport}
