@@ -10,12 +10,21 @@ const SEARLO_MIN_REQUEST_INTERVAL_MS = Math.max(
 const SEARLO_SAFE = (process.env.SEARLO_SAFE || "").trim().toLowerCase();
 const SEARLO_LR = (process.env.SEARLO_LR || "").trim();
 const SEARLO_API_BASE_URL =
-  process.env.SEARLO_API_BASE_URL || "https://api.searlo.tech/api/v1/search/web";
+  process.env.SEARLO_API_BASE_URL ||
+  "https://api.searlo.tech/api/v1/search/web";
 const SEARLO_API_KEY = (process.env.SEARLO_API_KEY || "").trim();
-const KEYWORD_DELAY_MS = Number(process.env.GOOGLE_REQUEST_DELAY_MS || "500");
+const KEYWORD_DELAY_MS = Number(process.env.GOOGLE_REQUEST_DELAY_MS || "3000");
+const RATE_LIMIT_COOLDOWN_MS = Number(
+  process.env.SEARLO_RATE_LIMIT_COOLDOWN_MS || "15000",
+);
+const RATE_LIMIT_MAX_RETRIES = 3;
 
 let searloQueue: Promise<void> = Promise.resolve();
 let searloLastRequestAt = 0;
+let searloHitCount = 0;
+let searloWindowStartAt = Date.now();
+const SEARLO_HITS_PER_WINDOW = 10;
+const SEARLO_WINDOW_COOLDOWN_MS = 60000;
 
 interface SearchGoogleResponse {
   links: string[];
@@ -65,7 +74,8 @@ function decodeGoogleRedirect(url: string): string {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
     if (host.endsWith("google.com") && parsed.pathname === "/url") {
-      const destination = parsed.searchParams.get("q") ?? parsed.searchParams.get("url");
+      const destination =
+        parsed.searchParams.get("q") ?? parsed.searchParams.get("url");
       if (destination) return destination;
     }
   } catch {
@@ -77,9 +87,11 @@ function decodeGoogleRedirect(url: string): string {
 function isOrganicLink(url: string): boolean {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+      return false;
     const hostname = parsed.hostname.replace(/^www\./, "").toLowerCase();
-    if (hostname === "google.com" || hostname.endsWith(".google.com")) return false;
+    if (hostname === "google.com" || hostname.endsWith(".google.com"))
+      return false;
     if (hostname === "webcache.googleusercontent.com") return false;
     return true;
   } catch {
@@ -90,7 +102,13 @@ function isOrganicLink(url: string): boolean {
 function pickUrlFromSearchItem(item: unknown): string | null {
   if (!item || typeof item !== "object") return null;
   const entry = item as Record<string, unknown>;
-  for (const field of ["url", "link", "href", "destinationUrl", "destination"]) {
+  for (const field of [
+    "url",
+    "link",
+    "href",
+    "destinationUrl",
+    "destination",
+  ]) {
     const value = entry[field];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
@@ -112,16 +130,21 @@ function hasSearloNextPage(payload: unknown): boolean {
   const entry = payload as Record<string, unknown>;
   const searchInformation = entry.searchInformation;
   if (searchInformation && typeof searchInformation === "object") {
-    const hasNextPage = (searchInformation as { hasNextPage?: unknown }).hasNextPage;
+    const hasNextPage = (searchInformation as { hasNextPage?: unknown })
+      .hasNextPage;
     if (hasNextPage === true) return true;
   }
   const nextPage = entry.nextPage;
-  if (typeof nextPage === "number") return Number.isFinite(nextPage) && nextPage > 0;
+  if (typeof nextPage === "number")
+    return Number.isFinite(nextPage) && nextPage > 0;
   if (typeof nextPage === "string") return nextPage.trim().length > 0;
   return false;
 }
 
-async function runSearloQueued<T>(task: () => Promise<T>): Promise<T> {
+async function runSearloQueued<T>(
+  task: () => Promise<T>,
+  log?: (msg: string) => void,
+): Promise<T> {
   let release: () => void = () => undefined;
   const turn = searloQueue;
   searloQueue = new Promise<void>((resolve) => {
@@ -130,11 +153,29 @@ async function runSearloQueued<T>(task: () => Promise<T>): Promise<T> {
 
   await turn;
   try {
+    // Per-request minimum interval
     const elapsed = Date.now() - searloLastRequestAt;
     const waitMs = Math.max(0, SEARLO_MIN_REQUEST_INTERVAL_MS - elapsed);
     if (waitMs > 0) {
       await sleep(waitMs + randomBetween(80, 260));
     }
+
+    // Every 10 hits, enforce a 40s window cooldown
+    searloHitCount++;
+    if (searloHitCount > SEARLO_HITS_PER_WINDOW) {
+      const windowElapsed = Date.now() - searloWindowStartAt;
+      const cooldownRemaining = SEARLO_WINDOW_COOLDOWN_MS - windowElapsed;
+      if (cooldownRemaining > 0) {
+        const waitSec = Math.ceil(cooldownRemaining / 1000);
+        log?.(
+          `⏳ 10 hits reached — cooling down ${waitSec}s to avoid rate limit...`,
+        );
+        await sleep(cooldownRemaining + randomBetween(500, 1500));
+      }
+      searloHitCount = 1;
+      searloWindowStartAt = Date.now();
+    }
+
     return await task();
   } finally {
     searloLastRequestAt = Date.now();
@@ -171,60 +212,101 @@ async function searchWithSearlo(
     });
 
     if (gl) params.set("gl", gl);
-    if (SEARLO_SAFE === "active" || SEARLO_SAFE === "off") params.set("safe", SEARLO_SAFE);
+    if (SEARLO_SAFE === "active" || SEARLO_SAFE === "off")
+      params.set("safe", SEARLO_SAFE);
     if (SEARLO_LR) params.set("lr", SEARLO_LR);
 
     log(`→ Page ${pageNumber}/${maxPages} fetching...`);
-    const t0 = Date.now();
 
     let response: Response;
-    try {
-      response = await runSearloQueued(() =>
-        fetch(`${SEARLO_API_BASE_URL}?${params.toString()}`, {
-          method: "GET",
-          headers: { "x-api-key": SEARLO_API_KEY },
-          cache: "no-store",
-          signal: AbortSignal.timeout(SEARLO_TIMEOUT_MS),
-        }),
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`✗ Page ${pageNumber} request failed (${Date.now() - t0}ms): ${message}`);
-      if (links.length > 0) {
-        log(`⚠ Stopping early — using ${links.length} results from previous pages`);
-        break;
-      }
-      return { links, error: `Searlo request failed on page ${pageNumber}: ${message}` };
-    }
-
-    log(`← Page ${pageNumber} responded: HTTP ${response.status} (${Date.now() - t0}ms)`);
-
     let payload: unknown = null;
-    try {
-      payload = await response.json();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`✗ Page ${pageNumber} invalid JSON: ${message}`);
-      if (links.length > 0) {
-        log(`⚠ Stopping early — using ${links.length} results from previous pages`);
+    let pageError: string | null = null;
+
+    for (let attempt = 1; attempt <= RATE_LIMIT_MAX_RETRIES; attempt++) {
+      const t0 = Date.now();
+      try {
+        response = await runSearloQueued(
+          () =>
+            fetch(`${SEARLO_API_BASE_URL}?${params.toString()}`, {
+              method: "GET",
+              headers: { "x-api-key": SEARLO_API_KEY },
+              cache: "no-store",
+              signal: AbortSignal.timeout(SEARLO_TIMEOUT_MS),
+            }),
+          log,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(
+          `✗ Page ${pageNumber} request failed (${Date.now() - t0}ms): ${message}`,
+        );
+        pageError = `Searlo request failed on page ${pageNumber}: ${message}`;
         break;
       }
-      return { links, error: `Searlo returned invalid JSON on page ${pageNumber}: ${message}` };
+
+      log(
+        `← Page ${pageNumber} responded: HTTP ${response!.status} (${Date.now() - t0}ms)`,
+      );
+
+      try {
+        payload = await response!.json();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`✗ Page ${pageNumber} invalid JSON: ${message}`);
+        pageError = `Searlo returned invalid JSON on page ${pageNumber}: ${message}`;
+        break;
+      }
+
+      if (response!.status === 429) {
+        const retryAfterHeader = response!.headers.get("retry-after");
+        const retryAfterMs = retryAfterHeader
+          ? (Number(retryAfterHeader) || 0) * 1000
+          : 0;
+        const waitMs = Math.max(retryAfterMs, RATE_LIMIT_COOLDOWN_MS);
+        const waitSec = Math.round(waitMs / 1000);
+        if (attempt < RATE_LIMIT_MAX_RETRIES) {
+          log(
+            `⏳ Rate limited (429) — Retry-After: ${retryAfterHeader ?? "not set"}, waiting ${waitSec}s then retrying (attempt ${attempt}/${RATE_LIMIT_MAX_RETRIES})...`,
+          );
+          await sleep(waitMs + randomBetween(500, 2000));
+          payload = null;
+          continue;
+        }
+        const errorMessage =
+          typeof payload === "object" && payload && "message" in payload
+            ? String((payload as { message: unknown }).message)
+            : "Rate limit exceeded";
+        log(
+          `✗ Page ${pageNumber} still rate limited after ${RATE_LIMIT_MAX_RETRIES} attempts`,
+        );
+        pageError = `Searlo API error on page ${pageNumber}: ${errorMessage}`;
+        break;
+      }
+
+      if (!response!.ok) {
+        const errorMessage =
+          typeof payload === "object" && payload && "message" in payload
+            ? String((payload as { message: unknown }).message)
+            : typeof payload === "object" && payload && "error" in payload
+              ? String((payload as { error: unknown }).error)
+              : `HTTP ${response!.status}`;
+        log(`✗ Page ${pageNumber} API error: ${errorMessage}`);
+        pageError = `Searlo API error on page ${pageNumber}: ${errorMessage}`;
+        break;
+      }
+
+      pageError = null;
+      break;
     }
 
-    if (!response.ok) {
-      const errorMessage =
-        typeof payload === "object" && payload && "message" in payload
-          ? String((payload as { message: unknown }).message)
-          : typeof payload === "object" && payload && "error" in payload
-            ? String((payload as { error: unknown }).error)
-            : `HTTP ${response.status}`;
-      log(`✗ Page ${pageNumber} API error: ${errorMessage}`);
+    if (pageError !== null) {
       if (links.length > 0) {
-        log(`⚠ Stopping early — using ${links.length} results from previous pages`);
+        log(
+          `⚠ Stopping early — using ${links.length} results from previous pages`,
+        );
         break;
       }
-      return { links, error: `Searlo API error on page ${pageNumber}: ${errorMessage}` };
+      return { links, error: pageError };
     }
 
     if (
@@ -234,23 +316,35 @@ async function searchWithSearlo(
       (payload as { success: unknown }).success === false
     ) {
       const message =
-        "message" in payload ? String((payload as { message: unknown }).message) : "Unknown error";
+        "message" in payload
+          ? String((payload as { message: unknown }).message)
+          : "Unknown error";
       log(`✗ Page ${pageNumber} rejected: ${message}`);
       if (links.length > 0) {
-        log(`⚠ Stopping early — using ${links.length} results from previous pages`);
+        log(
+          `⚠ Stopping early — using ${links.length} results from previous pages`,
+        );
         break;
       }
-      return { links, error: `Searlo API rejected request on page ${pageNumber}: ${message}` };
+      return {
+        links,
+        error: `Searlo API rejected request on page ${pageNumber}: ${message}`,
+      };
     }
 
     const items = pickSearchItems(payload);
     if (!items) {
       log(`✗ Page ${pageNumber} response missing items array`);
       if (links.length > 0) {
-        log(`⚠ Stopping early — using ${links.length} results from previous pages`);
+        log(
+          `⚠ Stopping early — using ${links.length} results from previous pages`,
+        );
         break;
       }
-      return { links, error: `Searlo response is missing items on page ${pageNumber}.` };
+      return {
+        links,
+        error: `Searlo response is missing items on page ${pageNumber}.`,
+      };
     }
 
     const countBefore = links.length;
@@ -267,17 +361,19 @@ async function searchWithSearlo(
 
     const newLinks = links.length - countBefore;
     const hasNext = hasSearloNextPage(payload);
-    log(`✓ Page ${pageNumber} done — +${newLinks} results (total: ${links.length}) hasNextPage: ${hasNext}`);
+    log(
+      `✓ Page ${pageNumber} done — +${newLinks} results (total: ${links.length}) hasNextPage: ${hasNext}`,
+    );
 
     if (targetDomain) {
-      const found = links.some(
-        (url) => {
-          const d = extractDomain(url);
-          return d === targetDomain || d.endsWith(`.${targetDomain}`);
-        },
-      );
+      const found = links.some((url) => {
+        const d = extractDomain(url);
+        return d === targetDomain || d.endsWith(`.${targetDomain}`);
+      });
       if (found) {
-        log(`■ Domain found — stopping early (saved ${maxPages - pageNumber} page credits)`);
+        log(
+          `■ Domain found — stopping early (saved ${maxPages - pageNumber} page credits)`,
+        );
         break;
       }
     }
@@ -302,10 +398,16 @@ export async function POST(request: Request) {
   };
 
   if (!Array.isArray(keywords) || keywords.length === 0) {
-    return Response.json({ error: "At least one keyword is required." }, { status: 400 });
+    return Response.json(
+      { error: "At least one keyword is required." },
+      { status: 400 },
+    );
   }
   if (!domain?.trim()) {
-    return Response.json({ error: "Target domain is required." }, { status: 400 });
+    return Response.json(
+      { error: "Target domain is required." },
+      { status: 400 },
+    );
   }
 
   const targetDomain = normalizeDomain(domain.trim());
@@ -352,7 +454,10 @@ export async function POST(request: Request) {
 
           for (let pos = 0; pos < links.length; pos++) {
             const linkDomain = extractDomain(links[pos]);
-            if (linkDomain === targetDomain || linkDomain.endsWith(`.${targetDomain}`)) {
+            if (
+              linkDomain === targetDomain ||
+              linkDomain.endsWith(`.${targetDomain}`)
+            ) {
               yourRank = pos + 1;
               yourRankedUrl = links[pos];
               break;
@@ -360,9 +465,15 @@ export async function POST(request: Request) {
           }
 
           if (yourRank) {
-            log(keyword, `✅ "${keyword}" ranked #${yourRank} → ${yourRankedUrl}`);
+            log(
+              keyword,
+              `✅ "${keyword}" ranked #${yourRank} → ${yourRankedUrl}`,
+            );
           } else {
-            log(keyword, `✗ "${keyword}" not found in top ${links.length} results`);
+            log(
+              keyword,
+              `✗ "${keyword}" not found in top ${links.length} results`,
+            );
           }
 
           const result: RankResult = {

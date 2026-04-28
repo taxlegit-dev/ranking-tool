@@ -62,6 +62,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const totalKeywords = inputSets.reduce(
     (count, item) =>
       count +
@@ -87,6 +88,7 @@ export default function Home() {
   }
 
   async function handleCheck() {
+    if (loading) return;
     setError("");
     let payloads: {
       inputName: string;
@@ -134,12 +136,15 @@ export default function Home() {
     setLoading(true);
     setResults([]);
     setLogs([]);
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       for (const payload of payloads) {
         const res = await fetch("/api/check-rank", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             keywords: payload.keywords,
             domain: payload.domain,
@@ -194,11 +199,26 @@ export default function Home() {
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Request failed. Please try again.";
-      setError(message);
+      const aborted =
+        err instanceof DOMException
+          ? err.name === "AbortError"
+          : err instanceof Error && err.name === "AbortError";
+      if (aborted) {
+        setError("Search cancelled.");
+        setLogs((prev) => [...prev, "Search cancelled by user."]);
+      } else {
+        const message = err instanceof Error ? err.message : "Request failed. Please try again.";
+        setError(message);
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
     }
+  }
+
+  function handleCancel() {
+    if (!loading) return;
+    abortRef.current?.abort();
   }
 
   function handleExport() {
@@ -442,6 +462,14 @@ export default function Home() {
                 )}
                 {loading ? "Checking Rankings..." : "Check All Rankings"}
               </button>
+              {loading && (
+                <button
+                  onClick={handleCancel}
+                  className="inline-flex w-full items-center justify-center rounded-xl border border-rose-300 bg-rose-50 px-6 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 sm:w-auto"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </div>
         </section>
